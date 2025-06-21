@@ -34,17 +34,21 @@ def predict_image(img):
     return classes[pred.item()]
 
 # --- Sidebar Inputs ---
-st.sidebar.header("📍 Route Selection")
+st.sidebar.header("📍 Route Planning")
 
-use_click = st.sidebar.toggle("Use map clicks to select start/end")
+# Session state
+if "selecting" not in st.session_state:
+    st.session_state.selecting = None
+if "start_coords" not in st.session_state:
+    st.session_state.start_coords = None
+if "end_coords" not in st.session_state:
+    st.session_state.end_coords = None
+if "route_coords" not in st.session_state:
+    st.session_state.route_coords = []
 
-# Inputs (only used if not using clicks)
-start_point = st.sidebar.text_input("Start Location", value="Connaught Place, New Delhi")
-end_point = st.sidebar.text_input("End Location", value="Rajouri Garden, New Delhi")
-
+# Prediction
 uploaded_files = st.sidebar.file_uploader("📸 Upload Road Images", type=["jpg", "jpeg", "png"], accept_multiple_files=True)
 
-# --- Predict Road Conditions ---
 predictions = []
 if uploaded_files:
     for file in uploaded_files:
@@ -53,61 +57,57 @@ if uploaded_files:
         predictions.append(pred)
     st.sidebar.success("🧠 Road Conditions: " + ", ".join(predictions))
 
-# --- Session State to Store Map + Coords ---
-if "start_coords" not in st.session_state:
+# Button flow for point selection
+st.sidebar.markdown("### 🖱️ Click-based Selection")
+col1, col2 = st.sidebar.columns(2)
+if col1.button("Select Start"):
+    st.session_state.selecting = "start"
+if col2.button("Select Destination"):
+    st.session_state.selecting = "end"
+
+if st.sidebar.button("Reset Selection"):
     st.session_state.start_coords = None
-if "end_coords" not in st.session_state:
     st.session_state.end_coords = None
-if "route_coords" not in st.session_state:
     st.session_state.route_coords = []
+    st.session_state.selecting = None
 
-# --- Interactive Map for Selecting Points ---
+# --- Map Rendering ---
 default_location = (28.6139, 77.2090)  # New Delhi center
-route_map = folium.Map(location=default_location, zoom_start=12, tiles="cartodb positron")
+map_center = st.session_state.start_coords or st.session_state.end_coords or default_location
+route_map = folium.Map(location=map_center, zoom_start=13, tiles="cartodb positron")
 
-# Add click instructions
-if use_click:
-    folium.Marker(default_location, popup="Click to select start/end points", icon=folium.Icon(color="blue")).add_to(route_map)
+# Marker preview
+if st.session_state.start_coords:
+    folium.Marker(st.session_state.start_coords, popup="Start", icon=folium.Icon(color="green")).add_to(route_map)
+if st.session_state.end_coords:
+    folium.Marker(st.session_state.end_coords, popup="Destination", icon=folium.Icon(color="red")).add_to(route_map)
 
-    # Display the map and capture clicks
-    click_data = st_folium(route_map, width=1200, height=600)
-    if click_data and click_data.get("last_clicked"):
-        lat, lon = click_data["last_clicked"]["lat"], click_data["last_clicked"]["lng"]
-        if st.session_state.start_coords is None:
-            st.session_state.start_coords = (lat, lon)
-            st.success(f"✅ Start point set at: {lat:.5f}, {lon:.5f}")
-        elif st.session_state.end_coords is None:
-            st.session_state.end_coords = (lat, lon)
-            st.success(f"✅ End point set at: {lat:.5f}, {lon:.5f}")
-        else:
-            st.warning("❗ Start and End already selected. Refresh to reset or click Generate Route.")
-else:
-    st.session_state.start_coords = None
-    st.session_state.end_coords = None
-    click_data = None
+# Detect map click
+click_data = st_folium(route_map, width=1200, height=600)
 
-# --- Generate Route ---
+if click_data and click_data.get("last_clicked"):
+    lat, lon = click_data["last_clicked"]["lat"], click_data["last_clicked"]["lng"]
+    if st.session_state.selecting == "start":
+        st.session_state.start_coords = (lat, lon)
+        st.session_state.selecting = None
+        st.success(f"✅ Start location set: {lat:.5f}, {lon:.5f}")
+    elif st.session_state.selecting == "end":
+        st.session_state.end_coords = (lat, lon)
+        st.session_state.selecting = None
+        st.success(f"✅ Destination set: {lat:.5f}, {lon:.5f}")
+
+# --- Route Calculation ---
 if st.sidebar.button("🚀 Generate Route"):
+    if not st.session_state.start_coords or not st.session_state.end_coords:
+        st.error("❌ Please select both start and destination points first.")
+        st.stop()
     try:
         with st.spinner("Calculating route..."):
-            # Use clicked coords or geocode from input
-            if use_click:
-                start_coords = st.session_state.start_coords
-                end_coords = st.session_state.end_coords
-                if not start_coords or not end_coords:
-                    st.error("❌ Please click on the map to select both start and end points.")
-                    st.stop()
-            else:
-                try:
-                    start_coords = ox.geocode(start_point)
-                    end_coords = ox.geocode(end_point)
-                except Exception:
-                    st.error("❌ Could not geocode one of the entered addresses.")
-                    st.stop()
-
+            start_coords = st.session_state.start_coords
+            end_coords = st.session_state.end_coords
             center = ((start_coords[0] + end_coords[0]) / 2,
                       (start_coords[1] + end_coords[1]) / 2)
-            G = ox.graph.graph_from_point(center, dist=1000, network_type="drive")
+            G = ox.graph.graph_from_point(center, dist=1500, network_type="drive")
 
             orig_node = ox.distance.nearest_nodes(G, start_coords[1], start_coords[0])
             dest_node = ox.distance.nearest_nodes(G, end_coords[1], end_coords[0])
@@ -115,44 +115,31 @@ if st.sidebar.button("🚀 Generate Route"):
 
             coords = [(G.nodes[n]["y"], G.nodes[n]["x"]) for n in route]
             st.session_state.route_coords = coords
-
-            # Reset map with route
-            route_map = folium.Map(location=center, zoom_start=13, tiles="cartodb positron")
-            pred_cycle = cycle(predictions if predictions else ["Good"])
-
-            for i in range(len(coords) - 1):
-                color = {
-                    "Good": "green",
-                    "Satisfactory": "orange",
-                    "Poor": "red",
-                    "Very Poor": "black"
-                }.get(next(pred_cycle), "blue")
-
-                folium.PolyLine(
-                    [coords[i], coords[i + 1]],
-                    color=color,
-                    weight=6,
-                    opacity=0.7
-                ).add_to(route_map)
-
-            folium.Marker(coords[0], popup="Start", icon=folium.Icon(color="green")).add_to(route_map)
-            folium.Marker(coords[-1], popup="End", icon=folium.Icon(color="red")).add_to(route_map)
-
             st.success("✅ Route generated!")
 
     except Exception as e:
         st.error(f"❌ Could not calculate route: {e}")
 
-# --- If route already exists, draw it on map ---
+# --- Draw Route if Available ---
 if st.session_state.route_coords:
+    pred_cycle = cycle(predictions if predictions else ["Good"])
     for i in range(len(st.session_state.route_coords) - 1):
+        color = {
+            "Good": "green",
+            "Satisfactory": "orange",
+            "Poor": "red",
+            "Very Poor": "black"
+        }.get(next(pred_cycle), "blue")
+
         folium.PolyLine(
             [st.session_state.route_coords[i], st.session_state.route_coords[i + 1]],
-            color="blue", weight=5, opacity=0.6
+            color=color,
+            weight=6,
+            opacity=0.7
         ).add_to(route_map)
 
     folium.Marker(st.session_state.route_coords[0], popup="Start", icon=folium.Icon(color="green")).add_to(route_map)
     folium.Marker(st.session_state.route_coords[-1], popup="End", icon=folium.Icon(color="red")).add_to(route_map)
 
-# --- Always Show Map at End ---
+# --- Display Final Map ---
 st_folium(route_map, width=1200, height=600)
