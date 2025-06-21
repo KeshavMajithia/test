@@ -9,7 +9,7 @@ import torchvision.transforms as transforms
 from torchvision import models
 from itertools import cycle
 
-# --- Page Config ---
+# --- Config ---
 st.set_page_config(page_title="SmartRoute AI", layout="wide")
 st.title("🛣️ SmartRoute AI - Road Health-Aware Routing")
 
@@ -25,7 +25,6 @@ def load_model():
 model = load_model()
 classes = ['Good', 'Satisfactory', 'Poor', 'Very Poor']
 
-# --- Prediction Function ---
 def predict_image(img):
     transform = transforms.Compose([transforms.Resize((224, 224)), transforms.ToTensor()])
     img = transform(img).unsqueeze(0)
@@ -35,38 +34,76 @@ def predict_image(img):
     return classes[pred.item()]
 
 # --- Sidebar Inputs ---
-st.sidebar.header("📍 Route Controls")
+st.sidebar.header("📍 Route Selection")
+
+use_click = st.sidebar.toggle("Use map clicks to select start/end")
+
+# Inputs (only used if not using clicks)
 start_point = st.sidebar.text_input("Start Location", value="Connaught Place, New Delhi")
 end_point = st.sidebar.text_input("End Location", value="Rajouri Garden, New Delhi")
 
-uploaded_files = st.sidebar.file_uploader(
-    "📸 Upload Multiple Road Images", type=["jpg", "jpeg", "png"], accept_multiple_files=True
-)
+uploaded_files = st.sidebar.file_uploader("📸 Upload Road Images", type=["jpg", "jpeg", "png"], accept_multiple_files=True)
 
+# --- Predict Road Conditions ---
 predictions = []
 if uploaded_files:
     for file in uploaded_files:
         img = Image.open(file).convert("RGB")
         pred = predict_image(img)
         predictions.append(pred)
-
-if uploaded_files:
     st.sidebar.success("🧠 Road Conditions: " + ", ".join(predictions))
 
-# --- Default Base Map (always shown) ---
-default_location = (28.6139, 77.2090)  # New Delhi
+# --- Session State to Store Map + Coords ---
+if "start_coords" not in st.session_state:
+    st.session_state.start_coords = None
+if "end_coords" not in st.session_state:
+    st.session_state.end_coords = None
+if "route_coords" not in st.session_state:
+    st.session_state.route_coords = []
+
+# --- Interactive Map for Selecting Points ---
+default_location = (28.6139, 77.2090)  # New Delhi center
 route_map = folium.Map(location=default_location, zoom_start=12, tiles="cartodb positron")
 
-# --- Generate Route and Overlay ---
-if st.sidebar.button("Generate Route"):
+# Add click instructions
+if use_click:
+    folium.Marker(default_location, popup="Click to select start/end points", icon=folium.Icon(color="blue")).add_to(route_map)
+
+    # Display the map and capture clicks
+    click_data = st_folium(route_map, width=1200, height=600)
+    if click_data and click_data.get("last_clicked"):
+        lat, lon = click_data["last_clicked"]["lat"], click_data["last_clicked"]["lng"]
+        if st.session_state.start_coords is None:
+            st.session_state.start_coords = (lat, lon)
+            st.success(f"✅ Start point set at: {lat:.5f}, {lon:.5f}")
+        elif st.session_state.end_coords is None:
+            st.session_state.end_coords = (lat, lon)
+            st.success(f"✅ End point set at: {lat:.5f}, {lon:.5f}")
+        else:
+            st.warning("❗ Start and End already selected. Refresh to reset or click Generate Route.")
+else:
+    st.session_state.start_coords = None
+    st.session_state.end_coords = None
+    click_data = None
+
+# --- Generate Route ---
+if st.sidebar.button("🚀 Generate Route"):
     try:
         with st.spinner("Calculating route..."):
-            start_coords = ox.geocode(start_point)
-            end_coords = ox.geocode(end_point)
-
-            if not start_coords or not end_coords:
-                st.error("❌ Invalid location inputs.")
-                st.stop()
+            # Use clicked coords or geocode from input
+            if use_click:
+                start_coords = st.session_state.start_coords
+                end_coords = st.session_state.end_coords
+                if not start_coords or not end_coords:
+                    st.error("❌ Please click on the map to select both start and end points.")
+                    st.stop()
+            else:
+                try:
+                    start_coords = ox.geocode(start_point)
+                    end_coords = ox.geocode(end_point)
+                except Exception:
+                    st.error("❌ Could not geocode one of the entered addresses.")
+                    st.stop()
 
             center = ((start_coords[0] + end_coords[0]) / 2,
                       (start_coords[1] + end_coords[1]) / 2)
@@ -77,11 +114,10 @@ if st.sidebar.button("Generate Route"):
             route = nx.shortest_path(G, orig_node, dest_node, weight="length")
 
             coords = [(G.nodes[n]["y"], G.nodes[n]["x"]) for n in route]
+            st.session_state.route_coords = coords
 
-            if len(coords) < 2:
-                st.error("❌ Route too short to display.")
-                st.stop()
-
+            # Reset map with route
+            route_map = folium.Map(location=center, zoom_start=13, tiles="cartodb positron")
             pred_cycle = cycle(predictions if predictions else ["Good"])
 
             for i in range(len(coords) - 1):
@@ -102,8 +138,21 @@ if st.sidebar.button("Generate Route"):
             folium.Marker(coords[0], popup="Start", icon=folium.Icon(color="green")).add_to(route_map)
             folium.Marker(coords[-1], popup="End", icon=folium.Icon(color="red")).add_to(route_map)
 
+            st.success("✅ Route generated!")
+
     except Exception as e:
         st.error(f"❌ Could not calculate route: {e}")
 
-# --- Always Display the Map ---
+# --- If route already exists, draw it on map ---
+if st.session_state.route_coords:
+    for i in range(len(st.session_state.route_coords) - 1):
+        folium.PolyLine(
+            [st.session_state.route_coords[i], st.session_state.route_coords[i + 1]],
+            color="blue", weight=5, opacity=0.6
+        ).add_to(route_map)
+
+    folium.Marker(st.session_state.route_coords[0], popup="Start", icon=folium.Icon(color="green")).add_to(route_map)
+    folium.Marker(st.session_state.route_coords[-1], popup="End", icon=folium.Icon(color="red")).add_to(route_map)
+
+# --- Always Show Map at End ---
 st_folium(route_map, width=1200, height=600)
