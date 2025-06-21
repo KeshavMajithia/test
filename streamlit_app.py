@@ -130,12 +130,19 @@ if st.sidebar.button("🚀 Generate Route"):
                       (start_coords[1] + end_coords[1]) / 2)
             G = ox.graph.graph_from_point(center, dist=1500, network_type="drive")
 
+            # Find nearest graph nodes
             orig_node = ox.distance.nearest_nodes(G, start_coords[1], start_coords[0])
             dest_node = ox.distance.nearest_nodes(G, end_coords[1], end_coords[0])
             route = nx.shortest_path(G, orig_node, dest_node, weight="length")
 
+            # Route coordinates for polyline
             coords = [(G.nodes[n]["y"], G.nodes[n]["x"]) for n in route]
             st.session_state.route_coords = coords
+
+            # Snap start/end markers to exact node coordinates
+            st.session_state.start_coords = (G.nodes[orig_node]["y"], G.nodes[orig_node]["x"])
+            st.session_state.end_coords = (G.nodes[dest_node]["y"], G.nodes[dest_node]["x"])
+
             st.success("✅ Route generated!")
 
     except Exception as e:
