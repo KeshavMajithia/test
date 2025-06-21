@@ -27,7 +27,7 @@ classes = ['Good', 'Satisfactory', 'Poor', 'Very Poor']
 
 # --- Prediction Function ---
 def predict_image(img):
-    transform = transforms.Compose([transforms.Resize((224,224)), transforms.ToTensor()])
+    transform = transforms.Compose([transforms.Resize((224, 224)), transforms.ToTensor()])
     img = transform(img).unsqueeze(0)
     with torch.no_grad():
         output = model(img)
@@ -39,7 +39,9 @@ st.sidebar.header("📍 Route Controls")
 start_point = st.sidebar.text_input("Start Location", value="Connaught Place, New Delhi")
 end_point = st.sidebar.text_input("End Location", value="Rajouri Garden, New Delhi")
 
-uploaded_files = st.sidebar.file_uploader("📸 Upload Multiple Road Images", type=["jpg","jpeg","png"], accept_multiple_files=True)
+uploaded_files = st.sidebar.file_uploader(
+    "📸 Upload Multiple Road Images", type=["jpg", "jpeg", "png"], accept_multiple_files=True
+)
 
 predictions = []
 if uploaded_files:
@@ -51,7 +53,11 @@ if uploaded_files:
 if uploaded_files:
     st.sidebar.success("🧠 Road Conditions: " + ", ".join(predictions))
 
-# --- Generate Route ---
+# --- Default Base Map (always shown) ---
+default_location = (28.6139, 77.2090)  # New Delhi
+route_map = folium.Map(location=default_location, zoom_start=12, tiles="cartodb positron")
+
+# --- Generate Route and Overlay ---
 if st.sidebar.button("Generate Route"):
     try:
         with st.spinner("Calculating route..."):
@@ -62,7 +68,7 @@ if st.sidebar.button("Generate Route"):
                 st.error("❌ Invalid location inputs.")
                 st.stop()
 
-            center = ((start_coords[0] + end_coords[0]) / 2, 
+            center = ((start_coords[0] + end_coords[0]) / 2,
                       (start_coords[1] + end_coords[1]) / 2)
             G = ox.graph.graph_from_point(center, dist=1000, network_type="drive")
 
@@ -78,8 +84,6 @@ if st.sidebar.button("Generate Route"):
 
             pred_cycle = cycle(predictions if predictions else ["Good"])
 
-            # --- Build Map ---
-            route_map = folium.Map(location=start_coords, zoom_start=13, tiles="cartodb positron")
             for i in range(len(coords) - 1):
                 color = {
                     "Good": "green",
@@ -89,7 +93,7 @@ if st.sidebar.button("Generate Route"):
                 }.get(next(pred_cycle), "blue")
 
                 folium.PolyLine(
-                    [coords[i], coords[i+1]],
+                    [coords[i], coords[i + 1]],
                     color=color,
                     weight=6,
                     opacity=0.7
@@ -98,9 +102,8 @@ if st.sidebar.button("Generate Route"):
             folium.Marker(coords[0], popup="Start", icon=folium.Icon(color="green")).add_to(route_map)
             folium.Marker(coords[-1], popup="End", icon=folium.Icon(color="red")).add_to(route_map)
 
-            st_folium(route_map, width=1200, height=600)
-
     except Exception as e:
         st.error(f"❌ Could not calculate route: {e}")
-else:
-    st.markdown("⬅️ Enter locations and upload images, then click **Generate Route**.")
+
+# --- Always Display the Map ---
+st_folium(route_map, width=1200, height=600)
